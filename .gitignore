@@ -1,0 +1,5 @@
+__pycache__*
+.idea
+learning_is_it_leaky
+stderr.log
+ParamsLogger.log

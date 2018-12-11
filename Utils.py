@@ -1,19 +1,68 @@
-import tensorflow as tf
+from skopt import dump
+from skopt.callbacks import CheckpointSaver
 
 
-'''
-    Takes in names of Models. 
-    Then uses theirs trainable variables to create
-    operations for copy which must be then run with tf Session
-'''
+class CheckpointSaverForLambdas(CheckpointSaver):
+    '''
+    Inherited from skopt.callbacks.CheckpoinSaver class
+    with changed Result object so it can also dump 
+    progress of bayessian hyperparams search where 
+    objective function is lambda function.
+    Args & Kwargs are same as for original class
+    '''
 
-def copyTrainableGraph(destModelName,srcModelName):
-    srcVars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,srcModelName)
-    destVars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,destModelName)
+    def __call__(self, res):
+        res.specs["args"]["func"] = None
+        dump(res, self.checkpoint_path, **self.dump_options)
+
+
+class DoneCallback:
+    '''
+    Currently callback class used for bayessian optimization
+    Stops learning between evaluations of objective function
+    if required by user. Note: Checkpoints stay so learning 
+    can be resumed 
+    Args:
+    dict flag_dict: Dictionary containing boolean, which represents 
+                    whether the learning should stop or continue
+    Kwargs: 
+    key: string,integer.. - Used as key under which boolean representing
+                            whether to stop or not is saved in the dictionary
+                            If nothing is passed default key("done") is used
     
-    ops = []
-    
-    for srcVar,destVar in zip(srcVars,destVars):
-        ops.append(tf.assign(destVar, srcVar))
-    return ops
-    
+    '''
+
+    def __init__(self, flag_dict, key=None):
+        self.flag_dict = flag_dict
+        self.key = "done" if key is None else key
+
+    def __call__(self, result):
+        return True if self.flag_dict[self.key] else False
+
+
+def my_logger(func):
+    '''
+    Decorator function used to log Args and Kwargs of given function
+    Args:
+    func: function which Args and Kwargs should be logged
+    '''
+    import logging
+    logging.basicConfig(filename="ParamsLogger.log", level=logging.INFO)
+
+    def wrapper(*args, **kwargs):
+        logging.info("Ran with args: {}, and kwargs: {}".format(args, kwargs))
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def stop_watch(func):
+    import time
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        func(*args, **kwargs)
+        end = time.time()
+        print("function {}, took {f:.4} seconds to finish".format(func.__name__, end - start))
+        return func(args, kwargs)
+
+    return wrapper
