@@ -1,8 +1,9 @@
-import math
-import os
+from math import ceil, log, log2
+from os import mkdir
 
 import numpy as np
-import tensorflow as tf
+from tensorflow.python.training.training_util import get_global_step
+from Utils import pickle_obj, unpickle
 
 
 class Memory(object):
@@ -21,51 +22,55 @@ class Memory(object):
 
 
 class MemoryRankBased(Memory):
-
+    """
+    Heap based RankBase Memory implementations (Tends to take overhelming amount of RAM)
+    """
     def __init__(self, RELOAD_FLAG=False, **conf):
-        # Making max size power of so the last row is full
-        # and has size of 2^(exponent-1).
-        # Max Size gonna be (2^exponent) -1
         if RELOAD_FLAG:
-            self.load(conf["logdir"])
+            conf = self.load(conf["logdir"])
         else:
-            self.alpha = conf["alpha"] if "alpha" in conf.keys() else 0.5
+            self.save(conf)
 
-            self.beta_start = conf["beta"] if "beta" in conf.keys() else 0.0
-            self.total_beta_time = conf["total_beta_time"] if "total_beta_time" in conf.keys() else 5e4
-            self.beta_gradient = (1 - self.beta_start) / self.total_beta_time
+        self.alpha = conf["alpha"] if "alpha" in conf.keys() else 0.5
 
-            exponent = math.ceil(math.log2(conf["size"] if "size" in conf.keys() else 1e5))
-            self.max_size = (2 ** exponent) - 1
-            self.last_row_size = 2 ** (exponent - 1)
+        self.beta_start = conf["beta"] if "beta" in conf.keys() else 0.0
+        self.total_beta_time = conf["total_beta_time"] if "total_beta_time" in conf.keys() else 5e4
+        self.beta_gradient = (1 - self.beta_start) / self.total_beta_time
 
-            self.current_size = 0
-            self.heap = []
+        exponent = ceil(log2(conf["size"] if "size" in conf.keys() else 1e5))
+        self.max_size = (2 ** exponent) - 1
+        self.last_row_size = 2 ** (exponent - 1)
 
-            self.NEED_UPDATE_FLAG = False
-            self.mem_idxs = []
+        self.current_size = 0
+        self.heap = []
 
-            self.base_batch_size = conf["batch_size"] if "batch_size" in conf.keys() else 64
+        self.NEED_UPDATE_FLAG = False
+        self.mem_idxs = []
 
-            self._compute_probs_CDF_span()
+        self.base_batch_size = conf["batch_size"] if "batch_size" in conf.keys() else 64
+
+        self._compute_probs_CDF_span()
 
     def __repr__(self):
         if self.current_size == 0:
             return "Heap is currently empty !!!"
 
-        max_level = math.ceil(math.log(self.current_size, 2))
+        max_level = ceil(log(self.current_size, 2))
         tmp_level = -1
 
         to_string = "The Heap has {} levels\n".format(max_level)
 
         for i in range(self.current_size):
-            curr_level = math.ceil(math.log(i + 2, 2))
+            curr_level = ceil(log(i + 2, 2))
             if curr_level != tmp_level:
                 to_string += ("\n" if tmp_level != -1 else "") \
                              + "level {}: ".format(curr_level)
                 tmp_level = curr_level
             to_string += "{}:{}  ".format(self.heap[i][0], self.heap[i][1])
         return to_string
+
+    def __len__(self):
+        return len(self.heap)
 
     def _insert(self, transition, priority):
         if not self.is_full():
@@ -130,42 +135,30 @@ class MemoryRankBased(Memory):
         self._perc_down(idx)
 
     def _compute_probs_CDF_span(self):
-        nomi = list(map(lambda x: x ** (-self.alpha), range(1, self.max_size + 1)))
-        denom = math.fsum(nomi)
+        nomi = np.arange(1, self.max_size+1) ** self.alpha
+        denomi = np.sum(nomi)
 
-        self.probabilities = [x / denom for x in nomi]
+        self.probabilities = nomi/denomi
 
-        self.CDF_reversed = [math.fsum(self.probabilities)]
-        for probability in self.probabilities[:-1]:
-            new_value = self.CDF_reversed[-1] - probability
-            self.CDF_reversed.append(new_value)
+        new_value = 1
+        self.CDF_reversed = np.ones(self.probabilities.shape[0])
+        for idx, probability in enumerate(self.probabilities[:-1]):
+            self.CDF_reversed[idx] = new_value
+            new_value = self.CDF_reversed[idx] - probability
 
-        prob_segment = 1 / self.base_batch_size
-        prob_rest = 1
-        self.span_indicis = []
-        eps = 1e-10
-
-        for idx, current in enumerate(self.CDF_reversed):
-            if prob_rest >= current:
-                prob_rest -= prob_segment
-                self.span_indicis.append(idx)
-                if prob_rest <= 0 + eps:
-                    self.span_indicis.append(self.max_size)
-                    break
+        self.span_indicis = self._compute_spans(self.base_batch_size)
 
     def _compute_spans(self, batch_size):
         prob_segment = 1 / batch_size
         prob_rest = 1
-        span_indicis = []
-        eps = 1e-10
+        span_indicis = np.zeros(batch_size)
+        idx_span = 0
 
-        for current, idx in zip(self.CDF_reversed, range(self.max_size)):
+        for curr_idx, current in enumerate(self.CDF_reversed):
             if prob_rest >= current:
                 prob_rest -= prob_segment
-                span_indicis.append(idx)
-                if prob_rest <= 0 + eps:
-                    span_indicis.append(self.max_size)
-                    break
+                span_indicis[idx_span] = curr_idx
+                idx_span += 1
 
         return span_indicis
 
@@ -179,48 +172,18 @@ class MemoryRankBased(Memory):
         self.heap = arr
         self.current_size = current_size_backup
 
-    def save(self, logdir):
+    def _load(self, logdir):
+        return unpickle(logdir)
+
+    def save(self, conf):
         try:
-            os.mkdir(logdir + "/numpy_save")
+            mkdir(conf["logdir"] + "/memory_constants")
         except:
             pass
-        np.save(logdir + "/numpy_save/memory", self.heap)
-        np.save(logdir + "/numpy_save/memory_spans", self.span_indicis)
-        np.save(logdir + "/numpy_save/probabilities", self.probabilities)
-        np.save(logdir + "/numpy_save/CDF_reversed", self.CDF_reversed)
-        f = open(logdir + "/numpy_save/constants", "w")
-        f.write(str(self.alpha) + "\n")
-        f.write(str(self.beta_start) + "\n")
-        f.write(str(self.total_beta_time) + "\n")
-        f.write(str(self.beta_gradient) + "\n")
-        f.write(str(self.max_size) + "\n")
-        f.write(str(self.last_row_size) + "\n")
-        f.write(str(self.current_size) + "\n")
-        f.write(str(self.base_batch_size) + "\n")
-        f.close()
-
-    def load(self, logdir):
-        self.heap = list(np.load(logdir + "/numpy_save/memory.npy"))
-        self.span_indicis = list(np.load(logdir + "/numpy_save/memory_spans.npy"))
-        self.probabilities = list(np.load(logdir + "/numpy_save/probabilities.npy"))
-        self.CDF_reversed = list(np.load(logdir + "/numpy_save/CDF_reversed.npy"))
-        f = open(logdir + "/numpy_save/constants", "r")
-        self.alpha = float(f.readline())
-        self.beta_start = float(f.readline())
-        self.total_beta_time = float(f.readline())
-        self.beta_gradient = float(f.readline())
-        self.max_size = int(f.readline())
-        self.last_row_size = int(f.readline())
-        self.current_size = int(f.readline())
-        self.base_batch_size = int(f.readline())
-
-        f.close()
-
-        self.NEED_UPDATE_FLAG = False
-        self.mem_idxs = []
+        pickle_obj(conf, conf["logdir"])
 
     def get_beta_plus_weight(self, sess):
-        global_step = sess.run(tf.train.get_global_step())
+        global_step = sess.run(get_global_step())
         if global_step <= self.total_beta_time:
             beta = self.beta_start + global_step * self.beta_gradient
             weighting_constant = self.probabilities[-1]
@@ -286,23 +249,24 @@ class MemoryRankBased(Memory):
 
 
 class MemoryUniform(Memory):
-    '''
-    Unoptimized implementation of Uniform Memory, use on your own danger 
-    Doesnt support saving yet.
-    '''
+    """
+    Simple uniform memory implementation
+    """
 
-    def __init__(self, **conf):
-        self.max_size = conf["size"]
-        self.base_batch_size = conf["batch_size"]
+    def __init__(self,
+                 **conf):
+        self.max_size = conf["size"] if "size" in conf.keys() else 1e4
+        self.base_batch_size = conf["batch_size"] if "batch_size" in conf.keys() else 32
         self.memory_arr = []
         self.oldest_memory = 0
 
+    def __len__(self):
+        return len(self.memory_arr)
+
     def add_transition(self, transition):
         if self.is_full():
-            if self.oldest_memory == self.max_size:
-                self.oldest_memory = 0
             self.memory_arr[self.oldest_memory] = transition
-            self.oldest_memory += 1
+            self.oldest_memory = (self.oldest_memory+1) % self.max_size
         else:
             self.memory_arr.append(transition)
 
@@ -310,13 +274,23 @@ class MemoryUniform(Memory):
         return len(self.memory_arr) >= self.max_size
 
     def get_n_samples(self, N=None):
-        if N is None:
+        if not N:
             N = self.base_batch_size
-        lenArr = len(self.memory_arr)
-        N = min(N, lenArr)
-        if lenArr > 0:
-            indices = np.random.choice(lenArr, N)
-            return np.column_stack([self.memory_arr[ind] for ind in indices])
+        if len(self) > 0:
+            indices = np.random.choice(len(self), N)
+            states, actions, rewards, next_states, dones = [], [], [], [], []
+            for idx in indices:
+                state, action, reward, next_state, done = self.memory_arr[idx]
+                states.append(np.array(state, copy=False))
+                actions.append(action)
+                rewards.append(reward)
+                next_states.append(np.array(next_state, copy=False))
+                dones.append(done)
+            return np.array(states),\
+                   np.array(actions),\
+                   np.array(rewards),\
+                   np.array(next_states),\
+                   np.array(dones)
         else:
             return -1
 

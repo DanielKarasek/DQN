@@ -1,6 +1,6 @@
 import argparse
 from builtins import bool
-from os import mkdir
+from os import mkdir, makedirs
 import threading
 
 import gym
@@ -12,25 +12,42 @@ import tensorflow as tf
 
 from Agent import Agent
 from Utils import DoneCallback, CheckpointSaverForLambdas
+from Wrappers import make_atari, wrap_deepmind
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("-p",
-                    "--problem",
-                    help="Problem to solve, 0-Cart Pole,1-Lunar Lander(discrete), 3-Mountain Car(discrete)",
-                    choices=[0, 1, 2, 3, 4],
-                    default=0,
-                    type=int,
+parser.add_argument("--env_id",
+                    help="What is the representation of state:\nInteger 0,1,2 meaning - "
+                         "underlying state of env(aka angles, speeds, etc.), RAM and RAW pixels respectively",
+                    default="BreakoutNoFrameskip-v4",
+                    type=str,
                     )
 
 subparsers = parser.add_subparsers(help="Different methods for learning processes", dest='command')
 
-tune = subparsers.add_parser("tune", help="Uses bayessian optimization for hyperparams tuning")
-learn = subparsers.add_parser("learn", help="Uses your hyperparams for learning")
+tune = subparsers.add_parser("tune", help="Uses bayesian optimization for hyperparams tuning")
+learn = subparsers.add_parser("train", help="Uses your hyperparams for learning, has option for playing from learned")
+tune.add_argument("--tar",
+                  help="Average reward target",
+                  type=int,
+                  default=9999999
+                  )
+
+tune.add_argument("--total",
+                  help="total step learning for each params",
+                  type=int,
+                  default=1000000
+                  )
 
 tune.add_argument("-Q",
                   "--DDQN",
-                  help="Boolean - whether to solve via double deep Q net(DDQN) and RankBased memory, or just Deep Q net(DQN)",
+                  help="Boolean - whether to solve via double deep Q net(DDQN) and RankBased memory, or just"
+                       "Deep Q net(DQN)",
+                  type=bool,
+                  default=True,
+                  )
+tune.add_argument("--dueling",
+                  help="Boolean - Whether to use dueling architecture",
                   type=bool,
                   default=True,
                   )
@@ -41,7 +58,7 @@ tune.add_argument("-r",
                   default=False,
                   )
 
-tune.add_argument("--savedir",
+tune.add_argument("--logdir",
                   help="Target directory of paused learning, required for TUNING",
                   type=str,
                   default=".",
@@ -61,28 +78,25 @@ tune.add_argument("-t",
                   type=str
                   )
 
-double_Q_group = learn.add_argument_group('Double Q options')
+learn.add_argument("-s",
+                   "--net_update_size",
+                   help="Moves targets NN weights closer towards train NN weights by factor of this number",
+                   default=1,
+                   type=float
+                   )
 
-double_Q_group.add_argument("-Q",
-                            "--double_Q",
-                            help="Enables double  a Q implementation of deep Q net",
-                            default=False,
-                            type=bool,
-                            )
+learn.add_argument("-f",
+                   "--net_update_frequency",
+                   help="How often update weight of target NN",
+                   default=1000,
+                   type=int
+                   )
 
-double_Q_group.add_argument("-s",
-                            "--net_update_size",
-                            help="Moves targets NN weights closer towards train NN weights by factor of this number",
-                            default=2e-4,
-                            type=float
-                            )
-
-double_Q_group.add_argument("-f",
-                            "--net_update_frequency",
-                            help="How often update weight of target NN",
-                            default=1,
-                            type=int
-                            )
+learn.add_argument("--play",
+                   help="Boolean - Whether to play the game from learned/randomly(randomly if logdir is not passed)",
+                   type=bool,
+                   default=False
+                   )
 
 learn.add_argument("-l",
                    "--learning_rate",
@@ -130,6 +144,19 @@ learn.add_argument("-y",
                    help="Time steps needed to decay eps Max to eps Min",
                    default=50000,
                    type=int
+                   )
+
+learn.add_argument("--dueling",
+                   help="Boolean - Whether to use dueling architecture",
+                   type=bool,
+                   default=False,
+                   )
+
+learn.add_argument("-Q",
+                   "--double_Q",
+                   help="Enables double  a Q implementation of deep Q net",
+                   default=False,
+                   type=bool,
                    )
 
 memory_group = learn.add_argument_group("Memory options")
@@ -180,7 +207,7 @@ reload_group.add_argument("-r",
 reload_group.add_argument("--logdir",
                           help="Target directory of paused learning",
                           type=str,
-                          default=None,
+                          default="./",
                           )
 
 args = parser.parse_args()
@@ -189,9 +216,9 @@ print(args)
 
 
 def create_memory_dict():
-    '''
+    """
     Creates dictionary for memory from arguments given to the program
-    '''
+    """
     memory_dict = {}
     memory_dict["size"] = args.memory_size
     memory_dict["batch_size"] = args.batch_size
@@ -204,9 +231,9 @@ def create_memory_dict():
 
 
 def create_hyper_params():
-    '''
+    """
     Creates dictionary for 'hyper-params' from arguments given to the program
-    '''
+    """
     layers = args.layers.split(",")
     layers = [int(layer) for layer in layers]
 
@@ -218,72 +245,179 @@ def create_hyper_params():
     hyper_params_dict["net_update_size"] = args.net_update_size
     hyper_params_dict["net_update_frequency"] = args.net_update_frequency
     hyper_params_dict["double_Q"] = args.double_Q
+    hyper_params_dict["dueling"] = args.dueling
     return hyper_params_dict
 
 
 def create_eps_params():
-    '''
+    """
     Creates dictionary for epsilon from arguments given to the program
-    '''
+    """
     eps_dict = {}
-    eps_dict["max"] = args.epsilon_max
-    eps_dict["min"] = args.epsilon_min
+    eps_dict["max"] = float(args.epsilon_max)
+    eps_dict["min"] = float(args.epsilon_min)
     eps_dict["decay_steps"] = args.epsilon_decay_steps
     return eps_dict
 
 
-def create_dict_agent_params(summary_dir, env, sess, ram, reload):
-    '''
+def create_dict_agent_params(summary_dir,
+                             env,
+                             env_play,
+                             sess,
+                             problem_type,
+                             reload):
+    """
     Combines all dictionaries,logdir,environment and tf.session into one dictionary
-    '''
+    """
     params_dict = {}
     params_dict["memory"] = create_memory_dict()
     params_dict["hyper_params"] = create_hyper_params()
     params_dict["eps"] = create_eps_params()
     params_dict["logdir"] = summary_dir
     params_dict["env"] = env
+    params_dict["env_play"] = env_play
     params_dict["sess"] = sess
-    params_dict["RAM"] = ram
+    params_dict["problem_type"] = problem_type
     params_dict["reload"] = reload
     return params_dict
 
 
-def run_solve():
-    PROBLEMS = ["CartPole-v1", "LunarLander-v2", "MountainCar-v0", "SpaceInvaders-ram-v0"]
+def load_env(summary_dir):
+    """
+    reloads name of environment
+    args:
+        summary_dir: directory in which file with the name(id) of environment is saved
 
-    if args.reload:
-        summary_dir = args.logdir
-        f = open(summary_dir + "/problem", "r")
-        problem_num = int(f.read())
-        f.close
+    returns: String - name(id) of the environment
 
+    """
+    f = open(summary_dir + "/problem", "r")
+    print(type(f))
+    env_id = f.readline()
+    f.close()
+    return env_id
+
+
+def automatic_dir_name():
+    """
+    returns: String - part of dir name containing values of basic hyperparameters
+    """
+    return "lr_" + str(args.learning_rate) +\
+           "update_freq_" + str(args.net_update_frequency) +\
+           "update_size_" + str(args.net_update_size) +\
+           "batch_" + str(args.batch_size)
+
+
+def create_summary_dir(env_id, summary_dir_path="./", add_automatic=True):
+    """
+    Creates summary dir with for the whole learning, adds inside the file with problem name(id)
+    env_id: name(id) of an environment
+    summary_dir_path: String - path which we wish the summary directory to have - default is a ./
+    add_automatic: Boolean - Whether to add generated string (adding basic hyperparams into name)
+                             to extend summary_dir_path
+    returns: String - final relative path of the summary dir
+    """
+    if add_automatic:
+        if summary_dir_path != "./":
+            summary_dir_path += "_"
+        summary_dir_path += automatic_dir_name()
+        
+    try:
+        makedirs(summary_dir_path)
+    except OSError:
+        print("The directory %s already exists".format(summary_dir_path))
+
+    f = open(summary_dir_path + "/problem", "w")
+    f.write(env_id)
+    f.close()
+    return summary_dir_path
+
+
+def make_env(env_id, env_type):
+    """
+    Creates the environment for learning and testing
+    args:
+        env_id: name of id
+        env_type: type of OPEN AI env (retro, atari, classic etc...)
+    returns: training environment, testing environment
+    """
+    if env_type == "atari":
+        env = make_atari(env_id)
+        env = wrap_deepmind(env, frame_stack=True)
+        env_play = make_atari(env_id)
+        env_play = wrap_deepmind(env_play, clip_rewards=False, frame_stack=True)
     else:
+        env = gym.make(env_id)
+        env_play = env
+    return env, env_play
 
-        summary_dir = "alpha_" + str(args.alpha) + ",beta_" + str(args.beta) + ",lr_" + str(args.learning_rate)
-        try:
-            mkdir(summary_dir)
-        except:
-            pass
 
-        problem_num = args.problem
+def get_env_prob_type(env_id):
+    """
+    Creates the environment from environment name (id)
+    args: env_id: name (id) of environment
+    returns: training environment, testing environment, OPEN AI env type
+    """
+    env_dict = {}
+    for env in gym.envs.registry.all():
+        env_dict[env.id] = env._entry_point[9:].split(":")[0]
+    env, env_play = make_env(env_id, env_dict[env_id])
+    return env, env_play, env_dict[env_id]
 
-        f = open(summary_dir + "/problem", "w")
-        f.write(str(problem_num))
-        f.close()
 
-    ram = True if problem_num > 2 else False
+def run_play():
+    """
+    Loads pretrained agent and plays on the environment on which the agent was trained
+    """
+    if not args.logdir:
+        print("no logdir passed")
+        return None
 
-    PROBLEM = PROBLEMS[problem_num]
+    env_id = load_env(args.logdir)
 
-    env = gym.make(PROBLEM)
+    env, env_play, problem_type = get_env_prob_type(env_id=env_id)
 
-    config = tf.ConfigProto()
-    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    summary_dir = args.logdir
 
-    flag_container = {"done": False, "show": False, "tune": False}
+    flag_container = {"done": False, "show": False, "verbosity": 2}
 
-    with tf.Session(config=config) as sess:
-        params_dict = create_dict_agent_params(summary_dir, env, sess, ram, args.reload)
+    with tf.Session() as sess:
+        params_dict = create_dict_agent_params(summary_dir, env, env_play, sess, problem_type, args.reload)
+        agent = Agent(params_dict)
+        print("Solving the problem...")
+        done_thread = threading.Thread(target=lambda: input_flags(flag_container))
+        done_thread.daemon = True
+        done_thread.start()
+
+        agent.play(n=100000, flag_container=flag_container)
+
+
+def run_solve():
+    # TODO: logdir None reload True, repair
+    """
+    Solves the given problem with parameters given. Both are from outside of the program
+    """
+    if args.reload:
+        env_id = load_env(args.logdir)
+        summary_dir = args.logdir
+    else:
+        env_id = args.env_id
+        print(args.logdir)
+        summary_dir = create_summary_dir(env_id=env_id,
+                                         summary_dir=args.logdir,
+                                         add_automatic=True,
+                                         )
+
+    env, env_play, problem_type = get_env_prob_type(env_id=env_id)
+
+    tf_config = tf.ConfigProto()
+    tf_config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+
+    flag_container = {"done": False, "show": False, "verbosity": 2}
+
+    # with tf.Session(config=tf_config) as sess:
+    with tf.Session() as sess:
+        params_dict = create_dict_agent_params(summary_dir, env, env_play, sess, problem_type, args.reload)
         agent = Agent(params_dict)
         print("Solving the problem...")
         done_thread = threading.Thread(target=lambda: input_flags(flag_container))
@@ -293,142 +427,85 @@ def run_solve():
         agent.solve(flag_container=flag_container)
 
 
-def process_conf(memory_type, DDQN, **conf):
-    hyper_params_dict = {}
-    memory_dict = {}
-    eps_dict = {}
-    params_dict = {}
-
-    hyper_params_dict["discount"] = 0.99
-
-    eps_dict["max"] = 1
-    eps_dict["min"] = 0.05
-    params_dict["reload"] = False
-
-    memory_dict["size"] = int(1e6)
-
-    hyper_params_dict["lr"] = conf["lr"]
-    hyper_params_dict["layers"] = conf["layers"]
-    eps_dict["decay_steps"] = conf["decay_steps"]
-    memory_dict["batch_size"] = conf["batch_size"]
-
-    memory_dict["type"] = "Uniform"
-    hyper_params_dict["double_Q"] = False
-    hyper_params_dict["net_update_size"] = 0
-    hyper_params_dict["net_update_frequency"] = 0
-    memory_dict["alpha"] = 0
-    memory_dict["beta"] = 0
-    memory_dict["total_beta_time"] = 0
-
-    if DDQN:
-        hyper_params_dict["double_Q"] = True
-        hyper_params_dict["net_update_size"] = conf["net_update_size"]
-        hyper_params_dict["net_update_frequency"] = conf["net_update_frequency"]
-
-    if memory_type == "RankBased":
-        memory_dict["type"] = memory_type
-        memory_dict["alpha"] = conf["alpha"]
-        memory_dict["beta"] = conf["beta"]
-        memory_dict["total_beta_time"] = conf["total_beta_time"]
-
-    params_dict["eps"] = eps_dict
-    params_dict["hyper_params"] = hyper_params_dict
-    params_dict["memory"] = memory_dict
-
-    return params_dict
-
-
-def _optimize_my_dear_bayes(problem_num=3,
-                            DDQN=True, memory_type="RankBased",
+# TODO : (env,)
+def _optimize_my_dear_bayes(agent_solve_dict,
+                            env_id,
                             summary_dir="./",
-                            flag_container={"done": False, "show": False, "tune": True},
-                            **conf):
-    conf = conf["conf"]
-    # Make this more generalized in future
+                            conf=None,
+                            update_conf_fn=None,
+                            **optim_params):
+    """
+    deprecated function for bayesian
+    optimization for given environment id
+    """
+    optim_params = optim_params["optim_params"]
+    if not (conf or update_conf_fn):
+        print("conf or update_conf_fn not passed")
+        return
 
-    layers = [conf["layer_0"], conf["layer_1"], conf["layer_2"]]
-    conf["layers"] = []
-
-    conf.pop("layer_0")
-    conf.pop("layer_1")
-    conf.pop("layer_2")
-
-    for layer in layers:
-        if layer == 0:
-            break
-        else:
-            conf["layers"].append(layer)
-
-    PROBLEMS = ["CartPole-v1", "LunarLander-v2", "MountainCar-v0", "SpaceInvaders-ram-v0", "Atlantis-ram-v0"]
-    PROBLEM = PROBLEMS[problem_num]
+    update_conf_fn(conf, **optim_params)
 
     # Create different folders for different settings of DDQN and mem_type
-    for k, v in zip(conf.keys(), conf.values()):
-        if type(v) is np.float64:
-            v = round(v, 6)
-        summary_dir += str(k) + "_" + str(v) + "__"
+    summary_dir += "lr_" + repr(round(conf["hyper_params"]["lr"], 5)) +\
+                   "_batch_" + repr(conf["memory"]["batch_size"]) +\
+                   "_layers_" + repr(conf["hyper_params"]["layers"]) +\
+                   "_up_freq_" + repr(conf["hyper_params"]["net_update_frequency"]) +\
+                   "_up_size_" + repr(round(conf["hyper_params"]["net_update_size"], 4))
 
     summary_dir = summary_dir.replace(" ", "")
     summary_dir = summary_dir.replace(",", "__")
     summary_dir = summary_dir.replace("[", "_")
     summary_dir = summary_dir.replace("]", "_")
 
-    conf = process_conf(DDQN=DDQN,
-                        memory_type=memory_type,
-                        **conf,
-                        )
+    if "reload" not in conf.keys():
+        conf["reload"] = False
 
-    try:
-        mkdir(summary_dir)
-    except:
-        pass
+    if conf["reload"]:
+        env_id = load_env(summary_dir)
+    else:
+        create_summary_dir(env_id, summary_dir,)
 
-    f = open(summary_dir + "/problem", "w")
-    f.write(str(problem_num))
-    f.close()
-
-    print("ahoj")
-    env = gym.make(PROBLEM)
-    print("ahoj")
-    # debugger, find line which needs the enter :)
+    env, problem_type = get_env_prob_type(env_id=env_id)
 
     conf["env"] = env
     conf["logdir"] = summary_dir
-    conf["RAM"] = True if problem_num > 2 else False
-    if flag_container["reload"]:
-        conf["reload"] = True
-        flag_container["reload"] = False
+    conf["problem_type"] = problem_type
 
     config = tf.ConfigProto()
     config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
 
-    with tf.Session(config=config) as sess:
+    with tf.Session() as sess:
         conf["sess"] = sess
         agent = Agent(conf)
-
-        agent_value = -agent.solve(flag_container=flag_container)
+        agent_value = -agent.solve(**agent_solve_dict)
 
     tf.reset_default_graph()
     return agent_value
 
 
 def bayesian_optimization():
-    np.set_printoptions(threshold=5)
-
+    """
+    deprecated function for bayesian
+    optimization for given environment id
+    """
     DDQN = args.DDQN
-    problem_num = args.problem
+    dueling = args.dueling
     memory_type = args.memory_type
     n_calls = args.n_calls
+    env_id = args.env_id
+    target = args.tar
+    total = args.total
+
 
     reload = args.reload
-    savedir = args.savedir
+    logdir = args.logdir
 
     try:
-        mkdir(savedir)
+        mkdir(logdir)
     except:
         pass
 
-    checkdir = args.savedir + "/chekpoint.pkl"
+    checkdir = args.logdir + "/chekpoint.pkl"
 
     if reload:
         res = load(checkdir)
@@ -442,22 +519,8 @@ def bayesian_optimization():
         y0 = None
         n_random_starts = 10
 
-    lr_cs = Real(1e-6, 1e-2, name="lr")
-    decay_steps_cs = Integer(0, 1000000, name="decay_steps")
-
-    layer0_cs = Integer(5, 128, name="layer_0")
-    layer1_cs = Integer(0, 64, name="layer_1")
-    layer2_cs = Integer(0, 64, name="layer_2")
-
-    update_size_cs = Real(0.0, 1.0, name="net_update_size")
-    update_freq_cs = Integer(5, 10000, name="net_update_frequency")
-
-    alpha_cs = Real(0.2, 1.0, name="alpha")
-    beta_cs = Real(0.0, 1.0, name="beta")
-    batch_size_cs = Integer(16, 256, name="batch_size")
-    total_beta_cs = Integer(50000, 2000000, name="total_beta_time")
-
-    flag_container = {"done": False, "show": False, "tune": True, "reload": reload}
+    flag_container = {"done": False, "show": False, "verbosity": 2}
+    agent_solve_dict = {"flag_container": flag_container, "target": target, "total_length": total, "tune": True}
 
     done_thread = threading.Thread(target=lambda: input_flags(flag_container))
     done_thread.daemon = True
@@ -468,30 +531,21 @@ def bayesian_optimization():
 
     callbacks = [saver, is_done]
 
-    space = [lr_cs, layer0_cs, layer1_cs, layer2_cs, batch_size_cs, decay_steps_cs]
-
-    if DDQN:
-        space.append(update_size_cs)
-        space.append(update_freq_cs)
-
-    if memory_type == "RankBased":
-        space.append(alpha_cs)
-        space.append(beta_cs)
-        space.append(total_beta_cs)
-
     # Add closure and remove need for custom saver
-    function = lambda **x: _optimize_my_dear_bayes(DDQN=DDQN,
-                                                   problem_num=problem_num,
-                                                   memory_type=memory_type,
-                                                   summary_dir=savedir + "/",
-                                                   flag_container=flag_container,
-                                                   conf=x,
+    conf, space_to_optim, update_conf_fn = process_conf(memory_type, DDQN, dueling, reload)
+
+    function = lambda **x: _optimize_my_dear_bayes(conf=conf,
+                                                   env_id=env_id,
+                                                   summary_dir=logdir + "/",
+                                                   update_conf_fn=update_conf_fn,
+                                                   agent_solve_dict=agent_solve_dict,
+                                                   optim_params=x,
                                                    )
-    f_tmp = use_named_args(space)
+    f_tmp = use_named_args(space_to_optim)
     function = f_tmp(function)
 
     result = gp_minimize(func=function,
-                         dimensions=space,
+                         dimensions=space_to_optim,
                          x0=x0,
                          y0=y0,
                          n_calls=n_calls,
@@ -504,21 +558,127 @@ def bayesian_optimization():
          )
 
 
+def process_conf(memory_type,
+                 DDQN=True,
+                 dueling=True,
+                 reload=False):
+    """
+    deprecated function for bayesian
+    optimization for given environment id
+    """
+    hyper_params_dict = {}
+    memory_dict = {}
+    eps_dict = {}
+    params_dict = {}
+
+    hyper_params_dict["discount"] = 0.99
+
+    eps_dict["max"] = 1
+    eps_dict["min"] = 0.05
+    params_dict["reload"] = reload
+
+    memory_dict["size"] = int(1e6)
+
+    params_array = []
+    params_array.append(Real(1e-6, 1e-2, name="lr"))
+    params_array.append(Integer(0, 1000000, name="decay_steps"))
+
+    params_array.append(Integer(5, 128, name="layer_0"))
+    params_array.append(Integer(0, 64, name="layer_1"))
+    params_array.append(Integer(0, 64, name="layer_2"))
+
+    params_array.append(Integer(16, 256, name="batch_size"))
+
+    memory_dict["type"] = "Uniform"
+    hyper_params_dict["double_Q"] = False
+    hyper_params_dict["dueling"] = False
+
+    params_array.append(Real(0.0, 1.0, name="net_update_size"))
+    params_array.append(Integer(5, 10000, name="net_update_frequency"))
+    memory_dict["alpha"] = 0
+    memory_dict["beta"] = 0
+    memory_dict["total_beta_time"] = 0
+
+    def process_layers(conf, *args, **kwargs):
+        layers = [kwargs["layer_0"], kwargs["layer_1"], kwargs["layer_2"]]
+        conf["hyper_params"]["layers"] = []
+
+        for layer in layers:
+            if layer == 0:
+                break
+            else:
+                conf["hyper_params"]["layers"].append(layer)
+
+    def update_conf(conf, *args, **kwargs):
+        conf["hyper_params"]["lr"] = kwargs["lr"]
+        conf["hyper_params"]["net_update_size"] = kwargs["net_update_size"]
+        conf["hyper_params"]["net_update_frequency"] = kwargs["net_update_frequency"]
+        conf["memory"]["batch_size"] = kwargs["batch_size"]
+        conf["eps"]["decay_steps"] = kwargs["decay_steps"]
+        process_layers(conf, **kwargs)
+        return conf
+
+    if dueling:
+        hyper_params_dict["dueling"] = True
+
+    if DDQN:
+        hyper_params_dict["double_Q"] = True
+
+    if memory_type == "RankBased":
+        memory_dict["type"] = memory_type
+        params_array.append(Real(0.2, 1.0, name="alpha"))
+        params_array.append(Real(0.0, 1.0, name="beta"))
+        params_array.append(Integer(50000, 2000000, name="total_beta_time"))
+
+        def update_conf_wrapper(conf, *args, **kwargs):
+            update_conf(conf, **kwargs)
+            conf["memory"]["alpha"] = kwargs["alpha"]
+            conf["memory"]["beta"] = kwargs["beta"]
+            conf["memory"]["total_beta_time"] = kwargs["total_beta_time"]
+
+        update_conf = update_conf_wrapper
+
+    params_dict["eps"] = eps_dict
+    params_dict["hyper_params"] = hyper_params_dict
+    params_dict["memory"] = memory_dict
+
+    return params_dict, params_array, update_conf
+
+
 def input_flags(flag_container):
+    """
+        function running on its own thread, containing flag container to influence main thread during run
+        flag_container: dictionary -
+                        done: Boolean - Whether to save and exit
+                        show: Boolean - Whether to render environment
+                        Verbosity: int - How much should the main thread be
+
+    """
     while True:
-        a = input()
-        if a == 'Q':
-            flag_container["done"] = True
-        elif a == 'S':
-            flag_container["show"] = False if flag_container["show"] else True
+        try:
+            a = input()
+            if a == 'Q':
+                flag_container["done"] = True
+            elif a == 'S':
+                flag_container["show"] = False if flag_container["show"] else True
+            elif a == 'V':
+                num = int(input())
+                flag_container["verbosity"] = num
+        except:
+            print("se neposer")
 
 
+# TODO: add play to input flags^^ :)
 def main():
     if args.command == "tune":
         bayesian_optimization()
-    elif args.command == "solve":
-        run_solve()
+    elif args.command == "train":
+        if args.play:
+            run_play()
+        else:
+            run_solve()
 
 
 if __name__ == "__main__":
     main()
+

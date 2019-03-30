@@ -1,20 +1,19 @@
 import tensorflow as tf
 
 
-def huber_loss(td_errors,delta_clip):
-    quadratic_part = tf.clip_by_value(t=td_errors, 
-                                      clip_value_min=0, 
-                                      clip_value_max=delta_clip
-                                      )
-    
-    linear_part = td_errors - quadratic_part
-    loss = 0.5 * tf.square(quadratic_part) + delta_clip * linear_part
-    loss = tf.reduce_mean(input_tensor=loss,
-                          axis=0,
-                          )  
-    return loss
-    
-    
+"""
+This module contains basic Losses used for NNs
+"""
+
+
+def huber_loss(x, delta_clip):
+    loss = tf.where(condition=tf.abs(x) < delta_clip,
+                    x=tf.square(x) * 0.5,
+                    y=delta_clip * (tf.abs(x) - 0.5 * delta_clip)
+                    )
+    return tf.reduce_mean(loss)
+
+
 def MSE(td_errors):
     squaredDiff = 0.5 * tf.square(td_errors)
     loss = tf.reduce_mean(input_tensor=squaredDiff,
@@ -24,6 +23,6 @@ def MSE(td_errors):
 
 
 def MAE(td_errors):
-    return tf.reduce_mean(input_tensor=td_errors,
+    return tf.reduce_mean(input_tensor=tf.abs(td_errors),
                           axis=0,
                           )
