@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.summary as tf_summary
 
+
 def moving_mean(new_value,
                 total_len,
                 name="moving_mean"):

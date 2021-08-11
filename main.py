@@ -1,17 +1,13 @@
 import argparse
-from builtins import bool
-from os import mkdir, makedirs
 import threading
 
+from builtins import bool
+from os import makedirs
+
 import gym
-import numpy as np
-from skopt import gp_minimize, load, dump
-from skopt.space import Real, Integer
-from skopt.utils import use_named_args
 import tensorflow as tf
 
 from Agent import Agent
-from Utils import DoneCallback, CheckpointSaverForLambdas
 from Wrappers import make_atari, wrap_deepmind
 
 parser = argparse.ArgumentParser()
@@ -23,60 +19,7 @@ parser.add_argument("--env_id",
                     type=str,
                     )
 
-subparsers = parser.add_subparsers(help="Different methods for learning processes", dest='command')
-
-tune = subparsers.add_parser("tune", help="Uses bayesian optimization for hyperparams tuning")
-learn = subparsers.add_parser("train", help="Uses your hyperparams for learning, has option for playing from learned")
-tune.add_argument("--tar",
-                  help="Average reward target",
-                  type=int,
-                  default=9999999
-                  )
-
-tune.add_argument("--total",
-                  help="total step learning for each params",
-                  type=int,
-                  default=1000000
-                  )
-
-tune.add_argument("-Q",
-                  "--DDQN",
-                  help="Boolean - whether to solve via double deep Q net(DDQN) and RankBased memory, or just"
-                       "Deep Q net(DQN)",
-                  type=bool,
-                  default=True,
-                  )
-tune.add_argument("--dueling",
-                  help="Boolean - Whether to use dueling architecture",
-                  type=bool,
-                  default=True,
-                  )
-tune.add_argument("-r",
-                  "--reload",
-                  help="Reloads",
-                  type=bool,
-                  default=False,
-                  )
-
-tune.add_argument("--logdir",
-                  help="Target directory of paused learning, required for TUNING",
-                  type=str,
-                  default=".",
-                  )
-
-tune.add_argument("-n",
-                  "--n_calls",
-                  help="How many calls different points in search find evaluate",
-                  default="40",
-                  type=int
-                  )
-
-tune.add_argument("-t",
-                  "--memory_type",
-                  help="Uniform or RankBased type of memory",
-                  default="Uniform",
-                  type=str
-                  )
+learn = parser.add_argument_group("Learn options")
 
 learn.add_argument("-s",
                    "--net_update_size",
@@ -159,7 +102,7 @@ learn.add_argument("-Q",
                    type=bool,
                    )
 
-memory_group = learn.add_argument_group("Memory options")
+memory_group = parser.add_argument_group("Memory options")
 
 memory_group.add_argument("-m",
                           "--memory_size",
@@ -196,7 +139,7 @@ memory_group.add_argument("-L",
                           type=float,
                           )
 
-reload_group = learn.add_argument_group("Reload options")
+reload_group = parser.add_argument_group("Reload options")
 
 reload_group.add_argument("-r",
                           "--reload",
@@ -404,7 +347,7 @@ def run_solve():
         env_id = args.env_id
         print(args.logdir)
         summary_dir = create_summary_dir(env_id=env_id,
-                                         summary_dir=args.logdir,
+                                         summary_dir_path=args.logdir,
                                          add_automatic=True,
                                          )
 
@@ -483,168 +426,6 @@ def _optimize_my_dear_bayes(agent_solve_dict,
     return agent_value
 
 
-def bayesian_optimization():
-    """
-    deprecated function for bayesian
-    optimization for given environment id
-    """
-    DDQN = args.DDQN
-    dueling = args.dueling
-    memory_type = args.memory_type
-    n_calls = args.n_calls
-    env_id = args.env_id
-    target = args.tar
-    total = args.total
-
-
-    reload = args.reload
-    logdir = args.logdir
-
-    try:
-        mkdir(logdir)
-    except:
-        pass
-
-    checkdir = args.logdir + "/chekpoint.pkl"
-
-    if reload:
-        res = load(checkdir)
-        x0 = res.x_iters
-        y0 = res.func_vals[:-1]
-        n_random_starts = 10 - len(x0)
-        n_random_starts = 0 if n_random_starts < 0 else n_random_starts
-
-    else:
-        x0 = None
-        y0 = None
-        n_random_starts = 10
-
-    flag_container = {"done": False, "show": False, "verbosity": 2}
-    agent_solve_dict = {"flag_container": flag_container, "target": target, "total_length": total, "tune": True}
-
-    done_thread = threading.Thread(target=lambda: input_flags(flag_container))
-    done_thread.daemon = True
-    done_thread.start()
-
-    is_done = DoneCallback(flag_container)
-    saver = CheckpointSaverForLambdas(checkdir)
-
-    callbacks = [saver, is_done]
-
-    # Add closure and remove need for custom saver
-    conf, space_to_optim, update_conf_fn = process_conf(memory_type, DDQN, dueling, reload)
-
-    function = lambda **x: _optimize_my_dear_bayes(conf=conf,
-                                                   env_id=env_id,
-                                                   summary_dir=logdir + "/",
-                                                   update_conf_fn=update_conf_fn,
-                                                   agent_solve_dict=agent_solve_dict,
-                                                   optim_params=x,
-                                                   )
-    f_tmp = use_named_args(space_to_optim)
-    function = f_tmp(function)
-
-    result = gp_minimize(func=function,
-                         dimensions=space_to_optim,
-                         x0=x0,
-                         y0=y0,
-                         n_calls=n_calls,
-                         n_random_starts=n_random_starts,
-                         callback=callbacks,
-                         )
-
-    dump(res=result,
-         filename=checkdir
-         )
-
-
-def process_conf(memory_type,
-                 DDQN=True,
-                 dueling=True,
-                 reload=False):
-    """
-    deprecated function for bayesian
-    optimization for given environment id
-    """
-    hyper_params_dict = {}
-    memory_dict = {}
-    eps_dict = {}
-    params_dict = {}
-
-    hyper_params_dict["discount"] = 0.99
-
-    eps_dict["max"] = 1
-    eps_dict["min"] = 0.05
-    params_dict["reload"] = reload
-
-    memory_dict["size"] = int(1e6)
-
-    params_array = []
-    params_array.append(Real(1e-6, 1e-2, name="lr"))
-    params_array.append(Integer(0, 1000000, name="decay_steps"))
-
-    params_array.append(Integer(5, 128, name="layer_0"))
-    params_array.append(Integer(0, 64, name="layer_1"))
-    params_array.append(Integer(0, 64, name="layer_2"))
-
-    params_array.append(Integer(16, 256, name="batch_size"))
-
-    memory_dict["type"] = "Uniform"
-    hyper_params_dict["double_Q"] = False
-    hyper_params_dict["dueling"] = False
-
-    params_array.append(Real(0.0, 1.0, name="net_update_size"))
-    params_array.append(Integer(5, 10000, name="net_update_frequency"))
-    memory_dict["alpha"] = 0
-    memory_dict["beta"] = 0
-    memory_dict["total_beta_time"] = 0
-
-    def process_layers(conf, *args, **kwargs):
-        layers = [kwargs["layer_0"], kwargs["layer_1"], kwargs["layer_2"]]
-        conf["hyper_params"]["layers"] = []
-
-        for layer in layers:
-            if layer == 0:
-                break
-            else:
-                conf["hyper_params"]["layers"].append(layer)
-
-    def update_conf(conf, *args, **kwargs):
-        conf["hyper_params"]["lr"] = kwargs["lr"]
-        conf["hyper_params"]["net_update_size"] = kwargs["net_update_size"]
-        conf["hyper_params"]["net_update_frequency"] = kwargs["net_update_frequency"]
-        conf["memory"]["batch_size"] = kwargs["batch_size"]
-        conf["eps"]["decay_steps"] = kwargs["decay_steps"]
-        process_layers(conf, **kwargs)
-        return conf
-
-    if dueling:
-        hyper_params_dict["dueling"] = True
-
-    if DDQN:
-        hyper_params_dict["double_Q"] = True
-
-    if memory_type == "RankBased":
-        memory_dict["type"] = memory_type
-        params_array.append(Real(0.2, 1.0, name="alpha"))
-        params_array.append(Real(0.0, 1.0, name="beta"))
-        params_array.append(Integer(50000, 2000000, name="total_beta_time"))
-
-        def update_conf_wrapper(conf, *args, **kwargs):
-            update_conf(conf, **kwargs)
-            conf["memory"]["alpha"] = kwargs["alpha"]
-            conf["memory"]["beta"] = kwargs["beta"]
-            conf["memory"]["total_beta_time"] = kwargs["total_beta_time"]
-
-        update_conf = update_conf_wrapper
-
-    params_dict["eps"] = eps_dict
-    params_dict["hyper_params"] = hyper_params_dict
-    params_dict["memory"] = memory_dict
-
-    return params_dict, params_array, update_conf
-
-
 def input_flags(flag_container):
     """
         function running on its own thread, containing flag container to influence main thread during run
@@ -671,7 +452,7 @@ def input_flags(flag_container):
 # TODO: add play to input flags^^ :)
 def main():
     if args.command == "tune":
-        bayesian_optimization()
+        pass #bayesian_optimization()
     elif args.command == "train":
         if args.play:
             run_play()

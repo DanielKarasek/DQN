@@ -1,2 +1,2 @@
-model_checkpoint_path: "/home/danielk/Desktop/python_projects/DeepRL/DeepQ/BreakFreeWTF6_lr_0.00025update_freq_10000update_size_1.0batch_32/chekpoints/my-model-6600001"
-all_model_checkpoint_paths: "/home/danielk/Desktop/python_projects/DeepRL/DeepQ/BreakFreeWTF6_lr_0.00025update_freq_10000update_size_1.0batch_32/chekpoints/my-model-6600001"
+model_checkpoint_path: "my-model-6600001"
+all_model_checkpoint_paths: "my-model-6600001"

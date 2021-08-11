@@ -1,7 +1,7 @@
-
 import time
 
 import numpy as np
+import cv2
 import tensorflow as tf
 
 
@@ -456,6 +456,7 @@ class Agent(object):
             while not done:
                 if flag_container["show"]:
                     self.env.render()
+
                     time.sleep(0.01)
                 if step_counter % self.memory_size == 0 and self.memory_type == "RankBased":
                     if flag_container["verbosity"] > 0:

@@ -70,7 +70,9 @@ class Model:
 
         self.double_Q = conf["double_Q"] if "double_Q" in conf.keys() else True
 
+
         self.logdir = conf["logdir"] + "/chekpoints"
+
         self.sess = conf["sess"]
 
         self.memory_type = conf["memory_type"]
@@ -99,6 +101,7 @@ class Model:
         if reload:
             print("Reloading graph...")
             print("checkpoints")
+            print("logdir is :"+self.logdir, end="\n\n\n")
             ckpt = tf.train.get_checkpoint_state(self.logdir)
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
             tf_summary.initialize(graph=tf.get_default_graph())
