@@ -1,0 +1,6 @@
+model_checkpoint_path: "my-model-400001"
+all_model_checkpoint_paths: "my-model-1"
+all_model_checkpoint_paths: "my-model-100001"
+all_model_checkpoint_paths: "my-model-200001"
+all_model_checkpoint_paths: "my-model-300001"
+all_model_checkpoint_paths: "my-model-400001"
