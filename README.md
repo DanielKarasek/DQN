@@ -17,9 +17,8 @@ This hoevewer introduces bias, paper below therefor proposes way to compensate t
 ## Examples
 Here are few videos from agents at the end of the learning process. I used to have plenty of graphs and shi.. which could be compared to Papers. In future I would love to find them and add them/create new ones and add them.
 
-https://user-images.githubusercontent.com/33940762/129268418-4ac59032-1e5e-4bfb-b815-5ddf31bf752c.mp4
-https://user-images.githubusercontent.com/33940762/129268433-981849bb-27e9-4a32-a058-8514aed83f16.mp4
-
+![breakout](https://github.com/DanielKarasek/DQN/blob/master/videos_readme/breakout.gif)
+![pong](https://github.com/DanielKarasek/DQN/blob/master/videos_readme/pong.gif)
 
 
 ## Parameters and how to run it
