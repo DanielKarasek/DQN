@@ -273,6 +273,7 @@ class Model:
             targets = self.ph_rewards + self.discount * next_Qs
             return targets
 
+
     def compute_td_error(self, targets):
         """
         Builds opt to compute TD error

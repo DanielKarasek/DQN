@@ -127,6 +127,7 @@ def build_Q_func(net_name="conv2fully", dueling=True, **net_kwargs):
                                                  num_outputs=1,
                                                  activation_fn=None
                                                  )
+                    # add - val.mean() term
                     q_values = adv + val
 
                 else:

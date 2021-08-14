@@ -21,6 +21,19 @@ parser.add_argument("--env_id",
 
 learn = parser.add_argument_group("Learn options")
 
+learn.add_argument("--dueling",
+                   help="Boolean - Whether to use dueling architecture",
+                   type=bool,
+                   default=False,
+                   )
+
+learn.add_argument("-Q",
+                   "--double_Q",
+                   help="Enables double  a Q implementation of deep Q net",
+                   default=False,
+                   type=bool,
+                   )
+
 learn.add_argument("-s",
                    "--net_update_size",
                    help="Moves targets NN weights closer towards train NN weights by factor of this number",
@@ -30,33 +43,13 @@ learn.add_argument("-s",
 
 learn.add_argument("-f",
                    "--net_update_frequency",
-                   help="How often update weight of target NN",
+                   help="How often update weight of target (frozen) NN in case of double (D)DQN",
                    default=1000,
                    type=int
                    )
 
-learn.add_argument("--play",
-                   help="Boolean - Whether to play the game from learned/randomly(randomly if logdir is not passed)",
-                   type=bool,
-                   default=False
-                   )
-
-learn.add_argument("-l",
-                   "--learning_rate",
-                   help="learning rate used for Neural network to use",
-                   default=5e-5,
-                   type=float
-                   )
-
-learn.add_argument("-d",
-                   "--discount",
-                   help="discount used to lower rewards further in future",
-                   default=0.99,
-                   type=float
-                   )
-
 learn.add_argument("--layers",
-                   help="Size of each layer in form of size,size,size... ",
+                   help="Size of each (dense-activation always relu in between layers) layer in form of size,size,size... ",
                    default="124,64",
                    type=str,
                    )
@@ -66,6 +59,14 @@ learn.add_argument("-b",
                    help="Size of batches fed to neural net",
                    default=32,
                    type=int
+                   )
+
+
+learn.add_argument("-l",
+                   "--learning_rate",
+                   help="learning rate used for Neural network to use",
+                   default=5e-5,
+                   type=float
                    )
 
 learn.add_argument("-e",
@@ -89,18 +90,22 @@ learn.add_argument("-y",
                    type=int
                    )
 
-learn.add_argument("--dueling",
-                   help="Boolean - Whether to use dueling architecture",
+
+learn.add_argument("--play",
+                   help="Boolean - Whether to play the game from learned/randomly(randomly if logdir is not passed)",
                    type=bool,
-                   default=False,
+                   default=False
                    )
 
-learn.add_argument("-Q",
-                   "--double_Q",
-                   help="Enables double  a Q implementation of deep Q net",
-                   default=False,
-                   type=bool,
+
+learn.add_argument("-d",
+                   "--discount",
+                   help="discount used to lower rewards further in future",
+                   default=0.99,
+                   type=float
                    )
+
+
 
 memory_group = parser.add_argument_group("Memory options")
 
@@ -438,6 +443,7 @@ def input_flags(flag_container):
     while True:
         try:
             a = input()
+            a.upper()
             if a == 'Q':
                 flag_container["done"] = True
             elif a == 'S':
@@ -445,6 +451,7 @@ def input_flags(flag_container):
             elif a == 'V':
                 num = int(input())
                 flag_container["verbosity"] = num
+        # wild except that shouldn't be used usually :O
         except:
             print("se neposer")
 
