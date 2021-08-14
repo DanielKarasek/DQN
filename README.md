@@ -1,5 +1,5 @@
 # DQN
-This is implementation of DQN, DDQN, dueling (D)DQN and importance sampling from replay memory. At the beginning there is basic ideas explanation with link to original papers. After that there are some examples of trained agents and how to run it.
+This is implementation of DQN, DDQN, dueling (D)DQN and importance sampling from replay memory. At the beginning there is basic ideas explanation with link to original papers. After that there are some examples of trained agents and how to run it. 
 
 ## Motivation and base idea (DQN - deep Q net)
 One of the obstacles to overcome in reinforcement learning is dependency of learning batches. This dependency comes from the fact, that agents learn from environment on the run. Batches are therefore consecutive states of environment and this leads to huge bias in learning (imagine learning only from past 10 minutes of life while not remembering anything else). 
@@ -24,4 +24,7 @@ Here are few videos from agents at the end of the learning process. I used to ha
 ![pong](https://github.com/DanielKarasek/DQN/blob/master/videos_readme/pong.gif)
 
 
-## Parameters and how to run it
+## How to run it and requirements
+This whole project was done in python 3.6, all required libraries are inside requirements.txt. After that some further actions might be needed for different environments (Mujoco, ROM atari etc. how to! are explained in error message when u try to run environment of this kind). To get all possible arguments call main.py with --help param. Quick rundown of most important ones.:
+* --env_id - environment id, u can find all possible environments on opent AI gym official doc site (given this apps runs on gym 0.12, some newer might not be viable).
+* ass
