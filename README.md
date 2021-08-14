@@ -2,7 +2,7 @@
 This is implementation of DQN, DDQN, dueling (D)DQN and importance sampling from replay memory. At the beginning there is basic ideas explanation with link to original papers. After that there are some examples of trained agents and how to run it.
 
 ## Motivation and base idea (DQN - deep Q net)
-One of the obstacles to overcome in reinforcement learning is dependency of learning batches. This dependency comes from the fact, that agents learn from environment on the run. Batches are therefore consecutive states of environment and this leads to huge bias in learning (imagine learning only from past 10 minutes of life and then forgetting everything else). 
+One of the obstacles to overcome in reinforcement learning is dependency of learning batches. This dependency comes from the fact, that agents learn from environment on the run. Batches are therefore consecutive states of environment and this leads to huge bias in learning (imagine learning only from past 10 minutes of life while not remembering anything else). 
 One way to achieve more IID kind of data is to use combination of Q-learning (1 step TD learning for action values) estimated by NN and replay memory. This approach is called deep Q nets (DQN). Replay memory contains experiences from past. Instead of using last N states as single batch, we sample transition from much further past experiences. These experiences are much more independent on each other (same as in real life, what u experienced hundred days ago isn't usually connected to what you experienced today). Experiments showed that this is indeed good strategy to reduce bias. Good to note is that this whole idea is inspired by human learn through dreaming.
 
 ## DDQN(dueling DQN)
