@@ -28,7 +28,7 @@ requests==2.26.0
 scipy==1.5.4
 six==1.16.0
 tensorboard==1.14.0
-tensorflow==1.14.0
+tensorflow==2.7.2
 tensorflow-estimator==1.14.0
 termcolor==1.1.0
 typing-extensions==3.10.0.0
