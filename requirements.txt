@@ -2,7 +2,7 @@ absl-py==0.13.0
 astor==0.8.1
 atari-py==0.2.9
 cached-property==1.5.2
-certifi==2021.5.30
+certifi==2022.12.7
 charset-normalizer==2.0.4
 cloudpickle==1.2.2
 dataclasses==0.8
